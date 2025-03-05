@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="ms">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Permainan Dam Haji Real-time</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    .square {
+      width: 60px;
+      height: 60px;
+    }
+    .dark {
+      background-color: #764d39;
+    }
+    .light {
+      background-color: #f0d9b5;
+    }
+    .piece {
+      width: 50px;
+      height: 50px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .white {
+      background-color: white;
+    }
+    .black {
+      background-color: black;
+    }
+    .selected {
+      border: 4px solid yellow;
+    }
+  </style>
+</head>
+<body class="bg-gray-900 text-white flex flex-col items-center justify-center min-h-screen">
+  <h1 class="text-3xl font-bold mb-4">Permainan Dam Haji Real-time</h1>
+  <p id="playerInfo" class="mb-4"></p>
+  <div id="board" class="grid grid-cols-8 border-4 border-gray-700"></div>
+  <p id="turnDisplay" class="mt-4"></p>
+
+  <!-- Firebase SDKs: Import modul Firebase (gunakan versi 9 modular) -->
+  <script type="module">
+    // Import Firebase modul yang diperlukan
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/9.6.10/firebase-app.js";
+    import { getDatabase, ref, onValue, set, update } from "https://www.gstatic.com/firebasejs/9.6.10/firebase-database.js";
+
+    // Konfigurasi Firebase (ganti dengan konfigurasi projek anda)
+    const firebaseConfig = {
+      apiKey: "YOUR_API_KEY",
+      authDomain: "YOUR_AUTH_DOMAIN",
+      databaseURL: "YOUR_DATABASE_URL",
+      projectId: "YOUR_PROJECT_ID",
+      storageBucket: "YOUR_STORAGE_BUCKET",
+      messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
+      appId: "YOUR_APP_ID"
+    };
+
+    // Inisialisasi Firebase
+    const app = initializeApp(firebaseConfig);
+    const db = getDatabase(app);
+    const gameRef = ref(db, "dam_haji_game");
+
+    let myColor = null; // Warna pemain: 'white' atau 'black'
+    let selectedSquareKey = null; // Kunci petak yang dipilih
+    const boardDiv = document.getElementById("board");
+    const playerInfo = document.getElementById("playerInfo");
+
+    // Fungsi untuk menyediakan keadaan papan awal
+    function getInitialBoard() {
+      const board = {};
+      for (let r = 0; r < 8; r++) {
+        for (let c = 0; c < 8; c++) {
+          const key = r + "-" + c;
+          // Letakkan buah hanya pada petak gelap ((r+c) ganjil)
+          if ((r + c) % 2 !== 0) {
+            if (r < 3) board[key] = { color: "white" };  // Buah putih di bahagian atas
+            else if (r > 4) board[key] = { color: "black" }; // Buah hitam di bahagian bawah
+            else board[key] = null;
+          } else {
+            board[key] = null;
+          }
+        }
+      }
+      return board;
+    }
+
+    // Inisialisasi keadaan permainan dalam Firebase jika belum wujud
+    function initializeGame() {
+      onValue(gameRef, (snapshot) => {
+        const data = snapshot.val();
+        if (!data) {
+          const initialState = {
+            board: getInitialBoard(),
+            turn: "white"  // Giliran bermula dengan putih
+          };
+          set(gameRef, initialState);
+        }
+      }, { onlyOnce: true });
+    }
+
+    initializeGame();
+
+    // Tentukan warna pemain melalui prompt
+    function chooseColor() {
+      let choice = prompt("Pilih warna anda (white/hitam):").toLowerCase();
+      while (choice !== "white" && choice !== "hitam" && choice !== "black") {
+        choice = prompt("Sila masukkan 'white' atau 'hitam' (black):").toLowerCase();
+      }
+      // Normalisasi: jika pengguna memasukkan 'hitam', gunakan 'black'
+      myColor = (choice === "hitam") ? "black" : choice;
+      playerInfo.textContent = "Anda bermain sebagai: " + (myColor === "white" ? "White" : "Black");
+    }
+
+    chooseColor();
+
+    // Dengarkan perubahan keadaan permainan secara real-time
+    onValue(gameRef, (snapshot) => {
+      const gameState = snapshot.val();
+      if (gameState) {
+        renderBoard(gameState.board);
+        updateTurnDisplay(gameState.turn);
+      }
+    });
+
+    // Fungsi untuk melukis semula papan berdasarkan keadaan dari Firebase
+    function renderBoard(boardState) {
+      boardDiv.innerHTML = ""; // Kosongkan papan
+      for (let r = 0; r < 8; r++) {
+        for (let c = 0; c < 8; c++) {
+          const key = r + "-" + c;
+          const square = document.createElement("div");
+          square.classList.add("square", ((r + c) % 2 === 0) ? "light" : "dark");
+          square.dataset.key = key;
+          square.addEventListener("click", () => onSquareClick(key));
+
+          // Jika terdapat buah di petak ini, lukis buahnya
+          if (boardState[key]) {
+            const piece = document.createElement("div");
+            piece.classList.add("piece", boardState[key].color);
+            if (key === selectedSquareKey) {
+              piece.classList.add("selected");
+            }
+            square.appendChild(piece);
+          }
+          boardDiv.appendChild(square);
+        }
+      }
+    }
+
+    // Kemas kini paparan giliran
+    function updateTurnDisplay(turn) {
+      document.getElementById("turnDisplay").textContent = "Giliran: " + turn;
+    }
+
+    // Fungsi untuk mengendalikan klik pada petak
+    function onSquareClick(key) {
+      // Dapatkan keadaan permainan terkini secara sekali (hanya sekali untuk elak pendengaran berganda)
+      onValue(gameRef, (snapshot) => {
+        const gameState = snapshot.val();
+        if (!gameState) return;
+        const boardState = gameState.board;
+        const currentTurn = gameState.turn;
+
+        // Pastikan hanya pemain yang mempunyai giliran yang boleh membuat langkah
+        if (currentTurn !== myColor) {
+          alert("Bukan giliran anda!");
+          return;
+        }
+
+        // Jika tiada buah yang dipilih dan petak yang diklik mempunyai buah anda, pilih buah itu
+        if (!selectedSquareKey && boardState[key] && boardState[key].color === myColor) {
+          selectedSquareKey = key;
+          renderBoard(boardState);
+        } 
+        // Jika buah sudah dipilih, cuba gerakkan ke petak klik (jika kosong)
+        else if (selectedSquareKey) {
+          if (!boardState[key]) {
+            // Logik mudah: gerakkan buah tanpa semakan pergerakan diagonal yang sah\n            boardState[key] = boardState[selectedSquareKey];\n            boardState[selectedSquareKey] = null;\n            // Tukar giliran\n            const nextTurn = (currentTurn === \"white\") ? \"black\" : \"white\";\n            update(gameRef, {\n              board: boardState,\n              turn: nextTurn\n            });\n            selectedSquareKey = null;\n          } else {\n            // Jika klik pada buah anda yang lain, tukar pilihan\n            if (boardState[key] && boardState[key].color === myColor) {\n              selectedSquareKey = key;\n              renderBoard(boardState);\n            } else {\n              alert(\"Langkah tidak sah!\");\n            }\n          }\n        }\n      }, { onlyOnce: true });\n    }
+  </script>
+</body>
+</html>
